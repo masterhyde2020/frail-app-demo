@@ -9,6 +9,7 @@ from googleapiclient.http import MediaInMemoryUpload
 from datetime import datetime
 
 # アプリのURL（あなたのURLに書き換え済み）
+# ここを正確に書き換えてください
 REDIRECT_URI = "https://frail-app-demo-gjy9srwec5ajdfhytfjxct.streamlit.app/"
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
