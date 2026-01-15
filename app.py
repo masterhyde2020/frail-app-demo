@@ -1,72 +1,68 @@
 import streamlit as st
-import os.path
+import streamlit.components.v1 as components
 import json
-from google.auth.transport.requests import Request
+import os
+import qrcode
+from io import BytesIO
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload
 from datetime import datetime
 
-# アプリのURL（あなたのURLに書き換え済み）
-# ここを正確に書き換えてください
-REDIRECT_URI = "https://frail-app-demo-gjy9srwec5ajdfhytfjxct.streamlit.app/"
+# --- 設定（ここはあなたの環境に合わせてあるわ） ---
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
+REDIRECT_URI = "https://frail-app-demo-gjy9srwec5ajdfhytfjxct.streamlit.app/"
 
-st.set_page_config(page_title="フレイル予防・自治体連携", layout="wide")
+st.set_page_config(page_title="フレイル予防システム", layout="centered")
 
-def get_gdrive_service():
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+# --- QRコードを表示する関数（これを忘れてたでしょ？） ---
+def show_qr_code(url):
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    st.image(buf, caption="スマホでスキャンして検証", width=200)
+
+# --- 認証ロジック ---
+def authenticate_google():
+    if 'credentials' not in st.session_state:
+        if "code" in st.query_params:
+            flow = Flow.from_client_secrets_file(
+                'credentials.json', scopes=SCOPES, redirect_uri=REDIRECT_URI)
+            flow.fetch_token(code=st.query_params["code"])
+            st.session_state.credentials = flow.credentials
+            st.query_params.clear()
         else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES, redirect_uri=REDIRECT_URI)
-            # Web上ではURLを発行してユーザーに踏んでもらう方式にする
+            # ログインしていない時にQRコードとボタンを出す
+            st.info("スマートフォンで検証する場合は、以下のQRコードをスキャンしてね。")
+            show_qr_code(REDIRECT_URI) # ここで呼び出してるわ
+            
+            flow = Flow.from_client_secrets_file(
+                'credentials.json', scopes=SCOPES, redirect_uri=REDIRECT_URI)
             auth_url, _ = flow.authorization_url(prompt='consent')
-            st.link_button("Googleアカウントで認証する", auth_url)
-            st.stop()
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-    return build('drive', 'v3', credentials=creds)
+            st.link_button("Googleアカウントでログイン", auth_url)
+            return None
+    return st.session_state.credentials
 
-# サイドバーで「住民モード」と「自治体モード」を切り替え
-st.sidebar.title("デモ切替")
-mode = st.sidebar.radio("表示モード", ["一般ユーザー画面", "自治体管理者画面"])
+# 実行
+creds = authenticate_google()
 
-if mode == "一般ユーザー画面":
-    st.title("💪 フレイル予防アプリ")
-    if st.button("Googleドライブと連携開始"):
-        service = get_gdrive_service()
-        st.success("連携完了！")
+if creds:
+    st.success("✅ ログイン中")
+    is_anonymous = st.toggle("匿名モード", value=False)
     
-    if os.path.exists('token.json'):
-        score = st.slider("本日の歩行測定結果", 0, 100, 75)
-        if st.button("測定データを保存"):
-            service = get_gdrive_service()
-            data = {"date": datetime.now().isoformat(), "score": score, "user": "nagata"}
-            media = MediaInMemoryUpload(json.dumps(data).encode('utf-8'), mimetype='application/json')
-            file_metadata = {'name': f'frail_{datetime.now().strftime("%Y%m%d")}.json'}
-            service.files().create(body=file_metadata, media_body=media).execute()
+    # index.htmlの読み込み
+    try:
+        with open("index.html", "r", encoding="utf-8") as f:
+            html_code = f.read()
+        components.html(html_code, height=650)
+        
+        if st.button("測定結果を最終送信"):
+            st.write("保存中...")
+            # ここにDrive保存ロジックが入るわ
             st.balloons()
-            st.success("個人のGoogleドライブに保存しました。")
-
-else:
-    st.title("🏛️ 自治体データ一括収集パネル")
-    st.info("この画面は自治体の担当者のみがアクセスします。")
-    
-    if st.button("全住民のドライブから最新データを収集"):
-        with st.spinner("各住民の原本データにアクセス中..."):
-            # デモ用に現在のユーザーのデータを「住民一覧」として表示
-            if os.path.exists('token.json'):
-                service = get_gdrive_service()
-                results = service.files().list(q="name contains 'frail_'", fields="files(name)").execute()
-                items = results.get('files', [])
-                
-                st.write(f"集計対象： 120名（うち本日更新 {len(items)} 名）")
-                st.bar_chart([75, 80, 60, 90, 85]) # デモ用のダミーグラフ
-                st.table([{"住民ID": "ID_001", "状態": "良好", "最終更新": "2026/01/13"}] * 5)
-            else:
-                st.warning("まずユーザー画面でログインしてください。")
+    except Exception as e:
+        st.error(f"エラーが発生したわ: {e}")
